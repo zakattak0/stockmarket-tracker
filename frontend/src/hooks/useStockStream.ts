@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { connectStockStream, StreamStatus } from "../services/stockStream";
+import { connectStockStream } from "../services/stockStream";
+import type { StreamStatus } from "../services/stockStream";
 
 export function useStockStream(
   symbol: string,

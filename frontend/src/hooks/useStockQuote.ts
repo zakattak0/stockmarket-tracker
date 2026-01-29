@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getStockApiToken } from "../utils/env";
-import { Quote } from "../types/quote";
+import type { Quote } from "../types/quote";
 
 type UseStockQuoteResult = {
   quoteError: string | null;

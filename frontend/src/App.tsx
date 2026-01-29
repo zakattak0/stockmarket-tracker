@@ -6,7 +6,7 @@ import { useStockQuote } from "./hooks/useStockQuote";
 import { AddSymbolForm } from "./components/AddSymbolForm";
 import { WatchlistChips } from "./components/WatchlistChips";
 import { PricePanel } from "./components/PricePanel";
-import { Quote } from "./types/quote";
+import type { Quote } from "./types/quote";
 
 export default function App() {
   const [quote, setQuote] = useState<Quote | null>(null);

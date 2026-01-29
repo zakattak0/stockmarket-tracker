@@ -1,6 +1,5 @@
-import React from "react";
-import { Quote } from "../types/quote";
-import { StreamStatus } from "../services/stockStream";
+import type { Quote } from "../types/quote";
+import type { StreamStatus } from "../services/stockStream";
 
 type Props = {
   selectedSymbol: string;
