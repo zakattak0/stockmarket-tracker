@@ -1,3 +1,8 @@
+/*
+  Watchlist management hook
+  - persists to localStorage
+*/
+
 import { useEffect, useState } from "react";
 
 const DEFAULT_WATCHLIST = ["META", "AAPL", "GOOGL"];
@@ -10,6 +15,7 @@ type UseWatchlistResult = {
   removeSymbol: (symbol: string) => void;
 };
 
+// Hook to manage a stock watchlist with localStorage persistence
 export function useWatchlist(): UseWatchlistResult {
   const [watchlist, setWatchlist] = useState<string[]>(() => {
     if (typeof localStorage === "undefined") return DEFAULT_WATCHLIST;
@@ -38,6 +44,7 @@ export function useWatchlist(): UseWatchlistResult {
     }
   }, [watchlist, selectedSymbol]);
 
+  // allows users to add a symbol to their watchlist
   const addSymbol = (raw: string) => {
     const cleaned = raw.trim().toUpperCase();
     if (!cleaned) return;
@@ -48,6 +55,7 @@ export function useWatchlist(): UseWatchlistResult {
     setSelectedSymbol(cleaned);
   };
 
+  // allows users to remove a symbol from their watchlist
   const removeSymbol = (symbol: string) => {
     setWatchlist((prev) => prev.filter((s) => s !== symbol));
   };

@@ -22,10 +22,10 @@ export function useStockQuote(symbol: string, setQuote: (quote: Quote) => void):
         if (!res.ok) throw new Error(`Quote request failed: ${res.status}`);
         const data = await res.json();
         const price = typeof data.c === "number" && data.c > 0 ? data.c : null;
-        const fallback = typeof data.pc === "number" && data.pc > 0 ? data.pc : null;
-        const value = price ?? fallback;
+        const prevClose = typeof data.pc === "number" && data.pc > 0 ? data.pc : null;
+        const value = price ?? prevClose;
         if (!cancelled && value != null) {
-          setQuote({ price: value, ts: Date.now(), source: "quote" });
+          setQuote({ price: value, ts: Date.now(), source: "quote", prevClose });
         }
       } catch (err: any) {
         if (!cancelled) {
