@@ -76,6 +76,7 @@ export default function App() {
           <NewsPage
             watchlist={newsSignalsData.watchlist}
             news={newsSignalsData.news}
+            quotesBySymbol={newsSignalsData.quotesBySymbol}
             symbolBuckets={newsSignalsData.symbolBuckets}
             newsLoading={newsSignalsData.newsLoading}
             newsError={newsSignalsData.newsError}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { getGeminiApiKey, getMarketAuxApiKey, getStockApiToken } from "../utils/env";
+import { getAlphaVantageApiKey, getGeminiApiKey, getStockApiToken } from "../utils/env";
 
 export type NewsArticle = {
   id: string;
@@ -46,20 +46,19 @@ export type SymbolNewsBucket = {
   averageSentiment: number | null;
 };
 
-type MarketAuxArticleResponse = {
-  uuid?: string;
-  title?: string;
-  description?: string;
-  snippet?: string;
+type AlphaVantageArticleResponse = {
   url?: string;
+  title?: string;
+  summary?: string;
   source?: string;
-  published_at?: string;
-  entities?: MarketAuxEntityResponse[];
+  time_published?: string;
+  overall_sentiment_score?: string;
+  ticker_sentiment?: AlphaVantageTickerSentiment[];
 };
 
-type MarketAuxEntityResponse = {
-  symbol?: string;
-  sentiment_score?: number | null;
+type AlphaVantageTickerSentiment = {
+  ticker?: string;
+  ticker_sentiment_score?: string;
 };
 
 type RawAnalysis = {
@@ -85,7 +84,7 @@ type UseNewsSignalsDataResult = {
   analysisError: string | null;
   lastUpdated: string | null;
   hasKeys: {
-    marketAux: boolean;
+    alphaVantage: boolean;
     gemini: boolean;
     stocks: boolean;
   };
@@ -96,21 +95,22 @@ type UseNewsSignalsDataOptions = {
   shouldAnalyze?: boolean;
 };
 
-const MARKET_AUX_URL = "https://api.marketaux.com/v1/news/all";
+const ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query";
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
-const MAX_ARTICLES = 24;
+const MAX_ARTICLES = 50;
 const ANALYSIS_ARTICLE_LIMIT = 12;
 const GEMINI_TIMEOUT_MS = 20000;
 const ANALYSIS_CACHE_PREFIX = "news-signals-analysis:";
+const NEWS_CACHE_PREFIX = "alpha-vantage-news:";
+const ALPHA_VANTAGE_REQUEST_SPACING_MS = 1100;
 
-function formatMarketAuxDate(date: Date): string {
+function formatAlphaVantageDate(date: Date): string {
   const year = date.getUTCFullYear();
   const month = String(date.getUTCMonth() + 1).padStart(2, "0");
   const day = String(date.getUTCDate()).padStart(2, "0");
   const hours = String(date.getUTCHours()).padStart(2, "0");
   const minutes = String(date.getUTCMinutes()).padStart(2, "0");
-  const seconds = String(date.getUTCSeconds()).padStart(2, "0");
-  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+  return `${year}${month}${day}T${hours}${minutes}`;
 }
 
 function getErrorMessage(error: unknown): string {
@@ -197,33 +197,47 @@ function normalizeAnalysis(raw: RawAnalysis, watchlist: string[]): WatchlistAnal
   };
 }
 
-function normalizeArticle(article: MarketAuxArticleResponse, watchlist: string[]): NewsArticle | null {
-  if (!article.url || !article.title || !article.published_at) return null;
+function normalizeAlphaVantageTimestamp(value: string): string | null {
+  const match = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/.exec(value);
+  if (!match) return null;
+
+  const [, year, month, day, hours, minutes, seconds] = match;
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}Z`;
+}
+
+function normalizeArticle(article: AlphaVantageArticleResponse, watchlist: string[]): NewsArticle | null {
+  if (!article.url || !article.title || !article.time_published) return null;
+
+  const publishedAt = normalizeAlphaVantageTimestamp(article.time_published);
+  if (!publishedAt) return null;
 
   const matchedSymbols = Array.from(
     new Set(
-      (article.entities ?? [])
-        .map((entity) => entity.symbol?.toUpperCase().trim())
+      (article.ticker_sentiment ?? [])
+        .map((entity) => entity.ticker?.toUpperCase().trim())
         .filter((symbol): symbol is string => typeof symbol === "string" && symbol.length > 0 && watchlist.includes(symbol))
     )
   );
 
   if (!matchedSymbols.length) return null;
 
-  const sentimentValues = (article.entities ?? [])
-    .filter((entity) => entity.symbol && matchedSymbols.includes(entity.symbol.toUpperCase()))
-    .map((entity) => entity.sentiment_score)
+  const sentimentValues = (article.ticker_sentiment ?? [])
+    .filter((entity) => entity.ticker && matchedSymbols.includes(entity.ticker.toUpperCase()))
+    .map((entity) => (typeof entity.ticker_sentiment_score === "string" ? Number(entity.ticker_sentiment_score) : null))
     .filter((score): score is number => typeof score === "number");
 
+  const overallSentiment =
+    typeof article.overall_sentiment_score === "string" ? Number(article.overall_sentiment_score) : null;
+
   return {
-    id: article.uuid ?? article.url,
+    id: article.url,
     title: article.title,
-    description: article.description ?? article.snippet ?? "No summary provided.",
+    description: article.summary ?? "No summary provided.",
     url: article.url,
     source: article.source ?? "Unknown source",
-    publishedAt: article.published_at,
+    publishedAt,
     symbols: matchedSymbols,
-    averageSentiment: average(sentimentValues),
+    averageSentiment: sentimentValues.length ? average(sentimentValues) : overallSentiment,
   };
 }
 
@@ -260,42 +274,187 @@ function writeCachedAnalysis(cacheKey: string, analysis: WatchlistAnalysis): voi
   }
 }
 
-async function fetchWatchlistNews(watchlist: string[], signal?: AbortSignal): Promise<NewsArticle[]> {
-  const marketAuxKey = getMarketAuxApiKey()?.trim();
-  if (!marketAuxKey) {
-    throw new Error("Missing MarketAux API key. Add MARKETAUX_API_KEY to the repo root .env.");
+function getLocalDayKey(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getNewsCacheKey(watchlist: string[]): string {
+  return `${NEWS_CACHE_PREFIX}${getLocalDayKey()}:${watchlist.join(",")}`;
+}
+
+function readCachedNews(cacheKey: string): NewsArticle[] | null {
+  if (typeof localStorage === "undefined") return null;
+
+  try {
+    const raw = localStorage.getItem(cacheKey);
+    if (!raw) return null;
+
+    const payload = JSON.parse(raw) as { dayKey?: string; articles?: NewsArticle[] };
+    if (payload.dayKey !== getLocalDayKey()) return null;
+    return Array.isArray(payload.articles) ? payload.articles : null;
+  } catch {
+    return null;
   }
+}
 
-  const publishedAfter = formatMarketAuxDate(new Date(Date.now() - 1000 * 60 * 60 * 24 * 7));
-  const params = new URLSearchParams({
-    api_token: marketAuxKey,
-    symbols: watchlist.join(","),
-    filter_entities: "true",
-    must_have_entities: "true",
-    language: "en",
-    sort: "published_at",
-    limit: String(MAX_ARTICLES),
-    published_after: publishedAfter,
-  });
+function readStaleCachedNews(cacheKey: string): NewsArticle[] | null {
+  if (typeof localStorage === "undefined") return null;
 
-  const response = await fetch(`${MARKET_AUX_URL}?${params.toString()}`, { signal });
-  if (!response.ok) {
-    let details = `MarketAux request failed: ${response.status}`;
-    try {
-      const payload = (await response.json()) as { error?: { message?: string } };
-      if (payload.error?.message) {
-        details = `MarketAux request failed: ${payload.error.message}`;
-      }
-    } catch {
-      // ignore response parsing failure
+  try {
+    const raw = localStorage.getItem(cacheKey);
+    if (!raw) return null;
+
+    const payload = JSON.parse(raw) as { articles?: NewsArticle[] };
+    return Array.isArray(payload.articles) ? payload.articles : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedNews(cacheKey: string, articles: NewsArticle[]): void {
+  if (typeof localStorage === "undefined") return;
+
+  try {
+    localStorage.setItem(
+      cacheKey,
+      JSON.stringify({
+        dayKey: getLocalDayKey(),
+        articles,
+      })
+    );
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function isAlphaVantageRateLimitMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes("1 request per second") || normalized.includes("25 requests per day");
+}
+
+async function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!ms) return;
+
+  await new Promise<void>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+
+    const onAbort = () => {
+      clearTimeout(timeoutId);
+      cleanup();
+      reject(new Error("Request cancelled."));
+    };
+
+    const cleanup = () => {
+      signal?.removeEventListener("abort", onAbort);
+    };
+
+    if (signal?.aborted) {
+      onAbort();
+      return;
     }
-    throw new Error(details);
+
+    signal?.addEventListener("abort", onAbort);
+  });
+}
+
+function mergeArticles(articles: NewsArticle[]): NewsArticle[] {
+  const byId = new Map<string, NewsArticle>();
+
+  for (const article of articles) {
+    const existing = byId.get(article.id);
+    if (!existing) {
+      byId.set(article.id, article);
+      continue;
+    }
+
+    const symbols = Array.from(new Set([...existing.symbols, ...article.symbols])).sort();
+    const sentimentValues = [existing.averageSentiment, article.averageSentiment].filter(
+      (value): value is number => typeof value === "number"
+    );
+
+    byId.set(article.id, {
+      ...existing,
+      symbols,
+      averageSentiment: sentimentValues.length ? average(sentimentValues) : existing.averageSentiment ?? article.averageSentiment,
+      description:
+        existing.description !== "No summary provided."
+          ? existing.description
+          : article.description,
+    });
   }
 
-  const payload = (await response.json()) as { data?: MarketAuxArticleResponse[] };
-  return (payload.data ?? [])
-    .map((article) => normalizeArticle(article, watchlist))
-    .filter((article): article is NewsArticle => Boolean(article));
+  return Array.from(byId.values()).sort(
+    (left, right) => new Date(right.publishedAt).getTime() - new Date(left.publishedAt).getTime()
+  );
+}
+
+async function fetchWatchlistNews(watchlist: string[], signal?: AbortSignal): Promise<NewsArticle[]> {
+  const alphaVantageKey = getAlphaVantageApiKey()?.trim();
+  if (!alphaVantageKey) {
+    throw new Error("Missing Alpha Vantage API key. Add ALPHAVANTAGE_API_KEY to the repo root .env.");
+  }
+
+  const cacheKey = getNewsCacheKey(watchlist);
+  const cachedNews = readCachedNews(cacheKey);
+  if (cachedNews) {
+    return cachedNews;
+  }
+
+  const timeFrom = formatAlphaVantageDate(new Date(Date.now() - 1000 * 60 * 60 * 24 * 7));
+  const collected: NewsArticle[] = [];
+
+  for (const [index, symbol] of watchlist.entries()) {
+    if (index > 0) {
+      await delay(ALPHA_VANTAGE_REQUEST_SPACING_MS, signal);
+    }
+
+    const params = new URLSearchParams({
+      function: "NEWS_SENTIMENT",
+      apikey: alphaVantageKey,
+      tickers: symbol,
+      sort: "LATEST",
+      limit: String(Math.max(10, Math.ceil(MAX_ARTICLES / Math.max(watchlist.length, 1)))),
+      time_from: timeFrom,
+    });
+
+    const response = await fetch(`${ALPHA_VANTAGE_URL}?${params.toString()}`, { signal });
+    if (!response.ok) {
+      throw new Error(`Alpha Vantage news request failed for ${symbol}: ${response.status}`);
+    }
+
+    const payload = (await response.json()) as {
+      feed?: AlphaVantageArticleResponse[];
+      Information?: string;
+      Note?: string;
+      "Error Message"?: string;
+    };
+    const upstreamError = payload["Error Message"] || payload.Note || payload.Information;
+    if (upstreamError) {
+      if (isAlphaVantageRateLimitMessage(upstreamError)) {
+        const staleCachedNews = readStaleCachedNews(cacheKey);
+        if (staleCachedNews) {
+          return staleCachedNews;
+        }
+      }
+      throw new Error(`Alpha Vantage news request failed for ${symbol}: ${upstreamError}`);
+    }
+
+    const symbolArticles = (payload.feed ?? [])
+      .map((article) => normalizeArticle(article, watchlist))
+      .filter((article): article is NewsArticle => Boolean(article));
+
+    collected.push(...symbolArticles);
+  }
+
+  const mergedArticles = mergeArticles(collected).slice(0, MAX_ARTICLES);
+  writeCachedNews(cacheKey, mergedArticles);
+  return mergedArticles;
 }
 
 async function fetchWatchlistQuotes(watchlist: string[], signal?: AbortSignal): Promise<WatchlistQuote[]> {
@@ -631,7 +790,7 @@ export function useNewsSignalsData(
     analysisError,
     lastUpdated,
     hasKeys: {
-      marketAux: Boolean(getMarketAuxApiKey()?.trim()),
+      alphaVantage: Boolean(getAlphaVantageApiKey()?.trim()),
       gemini: Boolean(getGeminiApiKey()?.trim()),
       stocks: Boolean(getStockApiToken()?.trim()),
     },

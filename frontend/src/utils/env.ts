@@ -25,6 +25,10 @@ export function getMarketAuxApiKey(): string | null {
   return readEnv(["MARKETAUX_API_KEY", "VITE_MARKETAUX_API_KEY"]);
 }
 
+export function getAlphaVantageApiKey(): string | null {
+  return readEnv(["ALPHAVANTAGE_API_KEY", "VITE_ALPHAVANTAGE_API_KEY"]);
+}
+
 export function getGeminiApiKey(): string | null {
   return readEnv(["GEMINI_API_KEY", "VITE_GEMINI_API_KEY"]);
 }

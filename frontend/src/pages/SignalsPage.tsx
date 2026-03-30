@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import type { SymbolSignal, WatchlistAnalysis, WatchlistQuote } from "../hooks/useNewsSignalsData";
 
 type SignalsPageProps = {
@@ -21,7 +22,7 @@ function formatSignedNumber(value: number | null, digits = 2): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}`;
 }
 
-function getSignalsInWatchlistOrder(
+function getSignalsSortedByConfidence(
   watchlist: string[],
   analysis: WatchlistAnalysis | null
 ): SymbolSignal[] {
@@ -29,7 +30,24 @@ function getSignalsInWatchlistOrder(
   const bySymbol = new Map(analysis.signals.map((signal) => [signal.symbol.toUpperCase(), signal]));
   return watchlist
     .map((symbol) => bySymbol.get(symbol))
-    .filter((signal): signal is SymbolSignal => Boolean(signal));
+    .filter((signal): signal is SymbolSignal => Boolean(signal))
+    .sort((left, right) => right.confidence - left.confidence);
+}
+
+function getActionColors(action: SymbolSignal["action"]): { background: string; color: string } {
+  if (action === "BUY") {
+    return { background: "#dcfce7", color: "#166534" };
+  }
+
+  if (action === "SELL") {
+    return { background: "#fee2e2", color: "#b91c1c" };
+  }
+
+  if (action === "HOLD") {
+    return { background: "#e5e7eb", color: "#4b5563" };
+  }
+
+  return { background: "#e0f2fe", color: "#0369a1" };
 }
 
 export function SignalsPage({
@@ -42,7 +60,7 @@ export function SignalsPage({
   refresh,
   refreshDisabled,
 }: SignalsPageProps) {
-  const sortedSignals = getSignalsInWatchlistOrder(watchlist, analysis);
+  const sortedSignals = useMemo(() => getSignalsSortedByConfidence(watchlist, analysis), [watchlist, analysis]);
 
   return (
     <div style={{ display: "grid", gap: 18 }}>
@@ -58,7 +76,7 @@ export function SignalsPage({
         <div style={{ display: "grid", gap: 4 }}>
           <h2 style={{ margin: 0, fontSize: "1.35rem" }}>Gemini Watchlist Outlook</h2>
           <div style={{ color: "#4b5563", fontSize: "0.95rem" }}>
-            Scenario-based signals informed by the same watchlist headlines plus current price reaction versus the previous close.
+            Scenario-based signals informed by Alpha Vantage headlines plus current price reaction versus the previous close.
           </div>
         </div>
 
@@ -113,6 +131,7 @@ export function SignalsPage({
               {sortedSignals.length ? (
                 sortedSignals.map((signal) => {
                   const quote = quotesBySymbol.get(signal.symbol);
+                  const actionColors = getActionColors(signal.action);
                   return (
                     <div
                       key={signal.symbol}
@@ -126,7 +145,15 @@ export function SignalsPage({
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                         <div style={{ fontWeight: 800, color: "#0f172a", fontSize: "1rem" }}>{signal.symbol}</div>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          <span style={{ padding: "0.22rem 0.55rem", borderRadius: 999, background: "#cffafe", color: "#155e75", fontWeight: 800 }}>
+                          <span
+                            style={{
+                              padding: "0.22rem 0.55rem",
+                              borderRadius: 999,
+                              background: actionColors.background,
+                              color: actionColors.color,
+                              fontWeight: 800,
+                            }}
+                          >
                             {signal.action}
                           </span>
                           <span style={{ padding: "0.22rem 0.55rem", borderRadius: 999, background: "#e0f2fe", color: "#0369a1", fontWeight: 700 }}>
