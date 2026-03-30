@@ -1,6 +1,3 @@
-// IMPORTANT: Chart non-functioning currently, hiding for now
-  const showChart = false;
-
 import { useCallback, useMemo, useState } from "react";
 import type React from "react";
 import { useWatchlist } from "./hooks/useWatchlist";
@@ -10,11 +7,16 @@ import { AddSymbolForm } from "./components/AddSymbolForm";
 import { PricePanel } from "./components/PricePanel";
 import type { Quote } from "./types/quote";
 import { Tabs } from "./components/Tabs";
-import { NewsSignalsPage } from "./pages/NewsSignalsPage";
+import { NewsPage } from "./pages/NewsPage";
+import { SignalsPage } from "./pages/SignalsPage";
 import { WatchlistSidebar } from "./components/WatchlistSidebar";
 import { StockChart } from "./components/StockChart";
+import { useNewsSignalsData } from "./hooks/useNewsSignalsData";
 
 type Page = { id: string; label: string; render: () => React.ReactNode };
+
+// IMPORTANT: Chart non-functioning currently, hiding for now
+const showChart = false;
 
 export default function App() {
   // Watchlist + streaming state (Watchlist page)
@@ -34,6 +36,7 @@ export default function App() {
   const { status, streamError } = useStockStream(selectedSymbol, handleStreamQuote);
   const { quoteError } = useStockQuote(selectedSymbol, setQuote);
   const error = streamError || quoteError;
+  const newsSignalsData = useNewsSignalsData(watchlist);
 
   const submitSymbol = () => {
     addSymbol(newSymbol);
@@ -68,11 +71,51 @@ export default function App() {
       },
       {
         id: "news",
-        label: "News & Signals",
-        render: () => <NewsSignalsPage />,
+        label: "News",
+        render: () => (
+          <NewsPage
+            watchlist={newsSignalsData.watchlist}
+            news={newsSignalsData.news}
+            symbolBuckets={newsSignalsData.symbolBuckets}
+            newsLoading={newsSignalsData.newsLoading}
+            newsError={newsSignalsData.newsError}
+            quotesError={newsSignalsData.quotesError}
+            lastUpdated={newsSignalsData.lastUpdated}
+            hasKeys={newsSignalsData.hasKeys}
+            refresh={newsSignalsData.refresh}
+            refreshDisabled={newsSignalsData.newsLoading || newsSignalsData.quotesLoading}
+          />
+        ),
+      },
+      {
+        id: "signals",
+        label: "Signals",
+        render: () => (
+          <SignalsPage
+            watchlist={newsSignalsData.watchlist}
+            quotesBySymbol={newsSignalsData.quotesBySymbol}
+            analysis={newsSignalsData.analysis}
+            analysisLoading={newsSignalsData.analysisLoading}
+            analysisError={newsSignalsData.analysisError}
+            quotesError={newsSignalsData.quotesError}
+            refresh={newsSignalsData.refresh}
+            refreshDisabled={newsSignalsData.newsLoading || newsSignalsData.quotesLoading}
+          />
+        ),
       }
     ],
-    [newSymbol, submitSymbol, watchlist, selectedSymbol, setSelectedSymbol, removeSymbol, status, error, quote]
+    [
+      newSymbol,
+      submitSymbol,
+      watchlist,
+      selectedSymbol,
+      setSelectedSymbol,
+      removeSymbol,
+      status,
+      error,
+      quote,
+      newsSignalsData,
+    ]
   );
 
   const active = pages.find((p) => p.id === activePage) ?? pages[0];

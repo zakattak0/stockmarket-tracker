@@ -1,13 +1,30 @@
+function readEnv(keys: string[]): string | null {
+  const imEnv = typeof import.meta !== "undefined" ? (import.meta as any).env : undefined;
+
+  for (const key of keys) {
+    const value =
+      imEnv?.[key] ||
+      (globalThis as any)[`__${key}`] ||
+      (globalThis as any).process?.env?.[key] ||
+      (typeof window !== "undefined" ? (window as any)[`__${key}`] : null);
+
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
 // looks for API key, returns it
 export function getStockApiToken(): string | null {
-  const imEnv = typeof import.meta !== "undefined" ? (import.meta as any).env : undefined;
-  return (
-    imEnv?.STOCK_API ||
-    imEnv?.VITE_STOCK_API ||
-    (globalThis as any).__STOCK_API ||
-    (globalThis as any).process?.env?.STOCK_API ||
-    (globalThis as any).process?.env?.REACT_APP_STOCK_API ||
-    (typeof window !== "undefined" ? (window as any).__STOCK_API : null) ||
-    null
-  );
+  return readEnv(["STOCK_API", "VITE_STOCK_API", "REACT_APP_STOCK_API"]);
+}
+
+export function getMarketAuxApiKey(): string | null {
+  return readEnv(["MARKETAUX_API_KEY", "VITE_MARKETAUX_API_KEY"]);
+}
+
+export function getGeminiApiKey(): string | null {
+  return readEnv(["GEMINI_API_KEY", "VITE_GEMINI_API_KEY"]);
 }
