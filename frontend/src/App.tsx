@@ -36,7 +36,6 @@ export default function App() {
   const { status, streamError } = useStockStream(selectedSymbol, handleStreamQuote);
   const { quoteError } = useStockQuote(selectedSymbol, setQuote);
   const error = streamError || quoteError;
-  const newsSignalsData = useNewsSignalsData(watchlist);
 
   const submitSymbol = () => {
     addSymbol(newSymbol);
@@ -45,6 +44,7 @@ export default function App() {
 
   // Page routing (tabs)
   const [activePage, setActivePage] = useState<string>("watchlist");
+  const newsSignalsData = useNewsSignalsData(watchlist, { shouldAnalyze: activePage === "signals" });
 
   // Different Pages
   const pages: Page[] = useMemo(

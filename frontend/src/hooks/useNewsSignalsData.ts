@@ -92,11 +92,16 @@ type UseNewsSignalsDataResult = {
   refresh: () => void;
 };
 
+type UseNewsSignalsDataOptions = {
+  shouldAnalyze?: boolean;
+};
+
 const MARKET_AUX_URL = "https://api.marketaux.com/v1/news/all";
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 const MAX_ARTICLES = 24;
 const ANALYSIS_ARTICLE_LIMIT = 12;
 const GEMINI_TIMEOUT_MS = 20000;
+const ANALYSIS_CACHE_PREFIX = "news-signals-analysis:";
 
 function formatMarketAuxDate(date: Date): string {
   const year = date.getUTCFullYear();
@@ -220,6 +225,39 @@ function normalizeArticle(article: MarketAuxArticleResponse, watchlist: string[]
     symbols: matchedSymbols,
     averageSentiment: average(sentimentValues),
   };
+}
+
+function getAnalysisCacheKey(watchlist: string[], news: NewsArticle[], quotes: WatchlistQuote[]): string {
+  const newsKey = news
+    .slice(0, ANALYSIS_ARTICLE_LIMIT)
+    .map((article) => `${article.id}:${article.publishedAt}`)
+    .join("|");
+  const quoteKey = quotes
+    .map((quote) => `${quote.symbol}:${quote.price ?? "na"}:${quote.prevClose ?? "na"}:${quote.asOf}`)
+    .join("|");
+
+  return `${ANALYSIS_CACHE_PREFIX}${JSON.stringify({ watchlist, newsKey, quoteKey })}`;
+}
+
+function readCachedAnalysis(cacheKey: string): WatchlistAnalysis | null {
+  if (typeof sessionStorage === "undefined") return null;
+
+  try {
+    const raw = sessionStorage.getItem(cacheKey);
+    return raw ? (JSON.parse(raw) as WatchlistAnalysis) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedAnalysis(cacheKey: string, analysis: WatchlistAnalysis): void {
+  if (typeof sessionStorage === "undefined") return;
+
+  try {
+    sessionStorage.setItem(cacheKey, JSON.stringify(analysis));
+  } catch {
+    // ignore storage errors
+  }
 }
 
 async function fetchWatchlistNews(watchlist: string[], signal?: AbortSignal): Promise<NewsArticle[]> {
@@ -419,6 +457,9 @@ async function analyzeWatchlistNews(
   }
 
   if (!response.ok) {
+    if (response.status === 429) {
+      throw new Error("Gemini rate limit hit (429). Wait a bit, then reopen the Signals tab or try Refresh Signals.");
+    }
     throw new Error(`Gemini request failed: ${response.status}`);
   }
 
@@ -438,7 +479,10 @@ async function analyzeWatchlistNews(
   return normalizeAnalysis(JSON.parse(text) as RawAnalysis, watchlist);
 }
 
-export function useNewsSignalsData(watchlistInput: string[]): UseNewsSignalsDataResult {
+export function useNewsSignalsData(
+  watchlistInput: string[],
+  { shouldAnalyze = true }: UseNewsSignalsDataOptions = {}
+): UseNewsSignalsDataResult {
   const watchlist = useMemo(
     () => Array.from(new Set(watchlistInput.map((symbol) => symbol.trim().toUpperCase()).filter(Boolean))),
     [watchlistInput]
@@ -454,6 +498,7 @@ export function useNewsSignalsData(watchlistInput: string[]): UseNewsSignalsData
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
+  const analysisCacheKey = useMemo(() => getAnalysisCacheKey(watchlist, news, quotes), [watchlist, news, quotes]);
 
   useEffect(() => {
     if (!watchlist.length) {
@@ -512,8 +557,20 @@ export function useNewsSignalsData(watchlistInput: string[]): UseNewsSignalsData
   }, [watchlist, refreshToken]);
 
   useEffect(() => {
+    if (!shouldAnalyze) {
+      setAnalysisLoading(false);
+      return;
+    }
+
     if (!watchlist.length || newsLoading || quotesLoading || (!news.length && !quotes.length)) {
-      setAnalysis(null);
+      setAnalysisLoading(false);
+      return;
+    }
+
+    const cachedAnalysis = readCachedAnalysis(analysisCacheKey);
+    if (cachedAnalysis) {
+      setAnalysis(cachedAnalysis);
+      setAnalysisError(null);
       setAnalysisLoading(false);
       return;
     }
@@ -524,7 +581,9 @@ export function useNewsSignalsData(watchlistInput: string[]): UseNewsSignalsData
       setAnalysisLoading(true);
       setAnalysisError(null);
       try {
-        setAnalysis(await analyzeWatchlistNews(watchlist, news, quotes, controller.signal));
+        const nextAnalysis = await analyzeWatchlistNews(watchlist, news, quotes, controller.signal);
+        writeCachedAnalysis(analysisCacheKey, nextAnalysis);
+        setAnalysis(nextAnalysis);
       } catch (error) {
         if (!controller.signal.aborted) {
           setAnalysis(null);
@@ -539,7 +598,7 @@ export function useNewsSignalsData(watchlistInput: string[]): UseNewsSignalsData
 
     void runAnalysis();
     return () => controller.abort();
-  }, [watchlist, news, quotes, newsLoading, quotesLoading]);
+  }, [watchlist, news, quotes, newsLoading, quotesLoading, shouldAnalyze, analysisCacheKey]);
 
   const symbolBuckets = useMemo<SymbolNewsBucket[]>(
     () =>
